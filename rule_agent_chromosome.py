@@ -1,54 +1,48 @@
-# A rule-based hanabi agent driven by a chromosome.
-# The objective of this class is to be a starter-class for a larger set of rules.
-# M. Fairbank. November 2021.
 from hanabi_learning_environment.rl_env import Agent
+import math
+import random
 
+# Finds the index of the largest value in a list 
 def argmax(llist):
-    #useful function for arg-max
     return llist.index(max(llist))
     
 class MyAgent(Agent):
     """Agent that applies a simple heuristic."""
 
-    def __init__(self, config, chromosome=[3, 7, 11, 16, 17, 18, 6, 5, 15 ,12], *args, **kwargs):# TODO replace this default chromosome with something better, if possible.  Plus, Add new bespoke rules below if necessary.
+
+    # This function defines our final chromosome with the list of rules in performance order
+    def __init__(self, config, chromosome=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18, 16, 17, 25, 19, 20, 21, 22, 24, 15, 26, 27], *args, **kwargs):
         """Initialize the agent."""
         self.config = config
         self.chromosome=chromosome
+        # Double check that our chromosome is defined as a list
         assert isinstance(chromosome, list)
-        
-        # Extract max info tokens or set default to 8.
         self.max_information_tokens = config.get('information_tokens', 8)
 
+
+    # Function that returns all the unseen cards in the deck by forming a dictionary of all the possible cards
+    # And removes discarded cards, cards we can see in other players hands and cards in the fireworks piles 
     def calculate_all_unseen_cards(self, discard_pile, player_hands, fireworks):
-        # All of the cards which we can't see are either in our own hand or in the deck.
-        # The other cards must be in the discard pile (all cards of which we have seen and remembered) or in other player's hands.
         colors = ['Y', 'B', 'W', 'R', 'G']
         full_hanabi_deck=[{"color":c, "rank":r} for c in colors for r in [0,0,0,1,1,2,2,3,3,4]]
         assert len(full_hanabi_deck)==50 # full hanabi deck size.
-
         result=full_hanabi_deck
-        # subract off all cards that have been discarded...
         for card in discard_pile:
             if card in result:
                 result.remove(card)
-        
-        # subract off all cards that we can see in the other players' hands...
         for hand in player_hands[1:]:
             for card in hand:
                 if card in result:
                     result.remove(card)
-
         for (color, height) in fireworks.items():
             for rank in range(height):
                 card={"color":color, "rank":rank}
                 if card in result:
                     result.remove(card)
-
-        # Now we left with only the cards we have never seen before in the game (so these are the cards in the deck UNION our own hand).
         return result             
 
+    # Filters a given set of cards by a hint provided to the function parameter 
     def filter_card_list_by_hint(self, card_list, hint):
-        # This could be enhanced by using negative hint information, available from observation['pyhanabi'].card_knowledge()[player_offset][card_number]
         filtered_card_list=card_list
         if hint["color"]!=None:
             filtered_card_list=[c for c in filtered_card_list if c["color"]==hint["color"]]
@@ -57,41 +51,40 @@ class MyAgent(Agent):
         return filtered_card_list
 
 
+    # Finds out which cards in the card list fit exactly onto the next value of its colour's firework
     def filter_card_list_by_playability(self, card_list, fireworks):
-        # find out which cards in card list would fit exactly onto next value of its colour's firework
         return [c for c in card_list if self.is_card_playable(c,fireworks)]
 
+    # Finds out which cards in the card list are always going to be unplayable on its colour's firework
     def filter_card_list_by_unplayable(self, card_list, fireworks):
-        # find out which cards in card list are always going to be unplayable on its colour's firework
-        # This function could be improved by considering that we know a card of value 5 will never be playable if all the 4s for that colour have been discarded.
         return [c for c in card_list if c["rank"]<fireworks[c["color"]]]
 
+    # Checks if a particular card fits onto its corresponding firework pile 
     def is_card_playable(self, card, fireworks):
         return card['rank'] == fireworks[card['color']]
 
+    # Invokes every turn for each play but only allow the player at offest 0 (Player whose turn it is)
+    # To make an action
     def act(self, observation):
-        # this function is called for every player on every turn
         """Act based on an observation."""
         if observation['current_player_offset'] != 0:
-            # but only the player with offset 0 is allowed to make an action.  The other players are just observing.
             return None
-        
         fireworks = observation['fireworks']
-        card_hints=observation['card_knowledge'][0] # This [0] produces the card hints for OUR own hand (player offset 0)
+        card_hints=observation['card_knowledge'][0]
         hand_size=len(card_hints)
 
-        # build some useful lists of information about what we hold in our hand and what team-mates know about their hands.
+        # Builds some useful lists of information about what we hold in our hand and what team-mates know about their hands.
         all_unseen_cards=self.calculate_all_unseen_cards(observation['discard_pile'],observation['observed_hands'],observation['fireworks'])
         possible_cards_by_hand=[self.filter_card_list_by_hint(all_unseen_cards, h) for h in card_hints]
         playable_cards_by_hand=[self.filter_card_list_by_playability(posscards, fireworks) for posscards in possible_cards_by_hand]
         probability_cards_playable=[len(playable_cards_by_hand[index])/len(possible_cards_by_hand[index]) for index in range(hand_size)]
         useless_cards_by_hand=[self.filter_card_list_by_unplayable(posscards, fireworks) for posscards in possible_cards_by_hand]
         probability_cards_useless=[len(useless_cards_by_hand[index])/len(possible_cards_by_hand[index]) for index in range(hand_size)]
-        
-        # based on the above calculations, try a sequence of rules in turn and perform the first one that is applicable:
+
+        # Apply the first rule that applies to our current state
         
         for rule in self.chromosome:
-            # Play any known playable cards that we might have
+            # Play any cards that we know are definitely playable on a firework pile
             if rule==0:
                 my_hand = observation['observed_hands'][0]
                 my_hints = observation['card_knowledge'][0]
@@ -101,24 +94,50 @@ class MyAgent(Agent):
                         return {'action_type': 'PLAY', 'card_index': Card_Index}
                     Card_Index += 1
 
-            elif rule==1:
-                # Discard any known discardable cards that we might have
-                my_hand = observation['observed_hands'][0]
-                my_hints = observation['card_knowledge'][0]
-                Card_Index = 0
-                for card, hint in zip(my_hand, my_hints):
-                    if card['color'] != None and card['rank'] < fireworks[card['color']]:
-                        return {'action_type': 'DISCARD', 'card_index': Card_Index}
-                    Card_Index += 1
+
+            elif rule in [1,2,3,4,5]:
+                # Play cards based on set probability thresholds
+                if rule==1:
+                    threshold=0.9
+                elif rule==2:
+                    threshold=0.8
+                elif rule==3:
+                    threshold=0.7
+                elif rule==4:
+                    threshold=0.6
+                else:
+                    threshold=0.5
+                if max(probability_cards_playable)>threshold:
+                    card_index=argmax(probability_cards_playable)
+                    return {'action_type': 'PLAY', 'card_index': card_index}
 
 
-            elif rule==2:
-                # Check if other players have unplayable cards i.e cards with a lower rank than the lowest firework pile
+            elif rule in [6, 7, 8, 9, 10]:
+                # If lives > 1, play a card based on probability with riskier thresholds as we have lives to spare
+                if observation['life_tokens'] > 1:
+                    if rule==6:
+                        threshold=0.7
+                    elif rule==7:
+                        threshold=0.65
+                    elif rule==8:
+                        threshold=0.6
+                    elif rule==9:
+                        threshold=0.55
+                    else:
+                        threshold=0.4
+                    if max(probability_cards_playable)>threshold:
+                        card_index=argmax(probability_cards_playable)
+                        return {'action_type': 'PLAY', 'card_index': card_index}
+
+
+            elif rule==11:
+                # Tell other players about unplayable cards they have i.e cards with a lower
+                # rank than the lowest firework pile
                 if observation['information_tokens'] > 0:
                     for player_offset in range(1, observation['num_players']):
                         Lowest_firework_height = min(observation['fireworks'].values())
-                        player_hand = observation['observed_hands'][1]
-                        player_hint = observation['card_knowledge'][1]
+                        player_hand = observation['observed_hands'][player_offset]
+                        player_hint = observation['card_knowledge'][player_offset]
                         for card, hint in zip(player_hand, player_hint):
                             if card['rank'] < Lowest_firework_height and hint['rank'] is None:
                                 return {
@@ -127,16 +146,13 @@ class MyAgent(Agent):
                                             'target_offset': player_offset
                                             }
 
-            elif rule==3:
-            # Check if it's possible to hint a card to your colleagues.  TODO this could be split into 2 separate rules?
+            elif rule==12:
+                # Tell a piece of information to other players about playable cards they have
                 if observation['information_tokens'] > 0:
-                        # Check if there are any playable cards in the hands of the opponents.
                         for player_offset in range(1, observation['num_players']):
                             player_hand = observation['observed_hands'][player_offset]
                             player_hints = observation['card_knowledge'][player_offset]
-                            # Check if the card in the hand of the opponent is playable.
                             for card, hint in zip(player_hand, player_hints):
-                                #if card['rank'] == fireworks[card['color']]:
                                 if self.is_card_playable(card,fireworks):
                                     if hint['color'] is None:
                                         return {
@@ -151,15 +167,14 @@ class MyAgent(Agent):
                                             'target_offset': player_offset
                                             }
 
-            elif rule==4:
-                # Tell other players about ones 
+            elif rule==13:
+                # Tell other players about ones they have in their hand
                if observation['information_tokens'] > 0:
                 for player_offset in range(1, observation['num_players']):
-                    Lowest_firework_height = min(observation['fireworks'].values())
-                    player_hand = observation['observed_hands'][1]
-                    player_hint = observation['card_knowledge'][1]
+                    player_hand = observation['observed_hands'][player_offset]
+                    player_hint = observation['card_knowledge'][player_offset]
                     for card, hint in zip(player_hand, player_hint):
-                        if card['rank'] == 1 and hint['rank'] is None:
+                        if card['rank'] == 0 and hint['rank'] is None:
                             return {
                                         'action_type': 'REVEAL_RANK',
                                         'rank': card['rank'],
@@ -167,48 +182,111 @@ class MyAgent(Agent):
                                         }
 
 
-            elif rule==5:
-                # Tell other players about fives 
+            elif rule==14:
+                # Tell other players about fives they have in their hand 
                if observation['information_tokens'] > 0:
                 for player_offset in range(1, observation['num_players']):
-                    Lowest_firework_height = min(observation['fireworks'].values())
-                    player_hand = observation['observed_hands'][1]
-                    player_hint = observation['card_knowledge'][1]
+                    player_hand = observation['observed_hands'][player_offset]
+                    player_hint = observation['card_knowledge'][player_offset]
                     for card, hint in zip(player_hand, player_hint):
-                        if card['rank'] == 5 and hint['rank'] is None:
+                        if card['rank'] == 4 and hint['rank'] is None:
                             return {
                                         'action_type': 'REVEAL_RANK',
                                         'rank': card['rank'],
                                         'target_offset': player_offset
                                         }
 
+            elif rule == 15:
+                # Tell other players the missing information for partially revealed
+                # Cards that they are holding 
+                if observation['information_tokens'] > 0:
+                        for player_offset in range(1, observation['num_players']):
+                            player_hand = observation['observed_hands'][player_offset]
+                            player_hints = observation['card_knowledge'][player_offset]
+                            for card, hint in zip(player_hand, player_hints):
+                                if hint['color'] != None and hint['rank'] is None:
+                                    return {
+                                        'action_type': 'REVEAL_RANK',
+                                        'rank': card['rank'],
+                                        'target_offset': player_offset
+                                    }
+                                elif hint['rank'] != None and hint['color'] is None:
+                                    return {
+                                        'action_type': 'REVEAL_COLOR',
+                                        'color': card['color'],
+                                        'target_offset': player_offset
+                                        }
+              
+            elif rule == 16:
+            # Tell a random player a piece of information about their oldest card
+                if observation['information_tokens'] > 0:
+                    random_player = random.randint(1, 3)
+                    player_hand = observation['observed_hands'][random_player]
+                    player_hints = observation['card_knowledge'][random_player]
+                    for card, hint in zip(player_hand, player_hints):
+                        if hint['color'] == None:
+                            return {
+                                'action_type': 'REVEAL_COLOR',
+                                'color': card['color'],
+                                'target_offset': random_player
+                                }
+                        elif hint['rank'] == None:
+                            return {
+                                'action_type': 'REVEAL_RANK',
+                                'rank': card['rank'],
+                                'target_offset': random_player
+                                }
 
-            elif rule in [6,7,8,9,10]:
-                # Play any highly-probable playable cards:
-                if rule==6:
+           
+            elif rule ==  17:
+            # Find the most illinformed player (the player with the least number of
+            # Overall hints for their hand) and give them some information about their oldest
+            # Card
+                if observation['information_tokens'] > 0: 	
+                    Least_information_count = -10
+                    Chosen_player_offset = -10
+                    for player_offset in range(1, observation['num_players']):
+                        Current_player_information_count = 0
+                        player_hints = observation['card_knowledge'][player_offset]   
+                        for each_card in player_hints:
+                            if each_card["rank"] != None and each_card["color"] != None:
+                                Current_player_information_count += 2
+                                continue
+                            elif each_card["rank"] != None:
+                                Current_player_information_count += 1
+                                continue
+                            elif each_card["color"] != None:
+                                Current_player_information_count += 1
+                                continue
+                        if Current_player_information_count > Least_information_count:
+                            Least_information_count = Current_player_information_count
+                            Chosen_player_offset = player_offset
+                    player_hand = observation['observed_hands'][Chosen_player_offset]
+                    player_hints = observation['card_knowledge'][Chosen_player_offset]
+                    for card, hint in zip(player_hand, player_hints):
+                        if hint['color'] == None:
+                            return {
+                                'action_type': 'REVEAL_COLOR',
+                                'color': card['color'],
+                                'target_offset': Chosen_player_offset
+                                }
+                        elif hint['rank'] == None:
+                            return {
+                                'action_type': 'REVEAL_RANK',
+                                'rank': card['rank'],
+                                'target_offset': Chosen_player_offset
+                                }
+            
+            
+            elif rule in [18,19,20,21,22]:
+                # Discard cards based on set probability thresholds
+                if rule==18:
                     threshold=0.9
-                elif rule==7:
+                elif rule==19:
                     threshold=0.8
-                elif rule==8:
+                elif rule==20:
                     threshold=0.7
-                elif rule==9:
-                    threshold=0.6
-                else:
-                    threshold=0.5
-                if max(probability_cards_playable)>threshold:
-                    card_index=argmax(probability_cards_playable)
-                    return {'action_type': 'PLAY', 'card_index': card_index}
-
-                
-            elif rule in [11,12, 13, 14, 15]:
-                # discard any highly-probable useless cards:
-                if rule==11:
-                    threshold=0.9
-                elif rule==12:
-                    threshold=0.8
-                elif rule==13:
-                    threshold=0.7
-                elif rule==14:
+                elif rule==21:
                     threshold=0.6
                 else:
                     threshold=0.5
@@ -216,9 +294,45 @@ class MyAgent(Agent):
                     if max(probability_cards_useless)>threshold:
                         card_index=argmax(probability_cards_useless)
                         return {'action_type': 'DISCARD', 'card_index': card_index}
+            
+            
+            elif rule==23:
+                # Discard any fully revealed cards that we know are discardable 
+                my_hand = observation['observed_hands'][0]
+                my_hints = observation['card_knowledge'][0]
+                Card_Index = 0
+                for card, hint in zip(my_hand, my_hints):
+                    if card['color'] != None and card['rank'] < fireworks[card['color']]:
+                        return {'action_type': 'DISCARD', 'card_index': Card_Index}
+                    Card_Index += 1
+
+            
+            
+            elif rule == 24:
+                # Discard a card that is the least likely to affect the highest achievable score for
+                # this game i.e. if the lowest pile is 1, then throw away the highest card held for
+                # that pile as it's unlikely that pile will score highly
+                if observation['information_tokens'] < self.max_information_tokens:
+                    Overall_lowest = 6
+                    for lowest in observation['fireworks']:
+                        if observation['fireworks'][lowest] < Overall_lowest:
+                            Overall_lowest = observation['fireworks'][lowest]
+                            Lowest_pile = lowest
+                    Highest_card_index = 0 
+                    Highest_card_least_likely_to_affect_game = 0
+                    Card_Index = 0
+                    my_hand = observation['observed_hands'][0]
+                    my_hints = observation['card_knowledge'][0]
+                    for card, hint in zip(my_hand, my_hints):
+                        if card['color'] == Lowest_pile and card['rank'] > observation['fireworks'][Lowest_pile]and card['rank'] > Highest_card_least_likely_to_affect_game:
+                            Highest_card_least_likely_to_affect_game = card
+                            Highest_card_index = Card_Index
+                        Card_Index += 1
+                    return {'action_type': 'DISCARD', 'card_index': Highest_card_index}
+            
                     
-            elif rule == 16:
-                # Discard the oldest card with no information
+            elif rule == 25:
+                # Discard our oldest card that has no hints given
                 if observation['information_tokens'] < self.max_information_tokens:
                     my_hints = observation['card_knowledge'][0]
                     Card_Index = 0
@@ -228,20 +342,18 @@ class MyAgent(Agent):
                         Card_Index += 1
                             
             
-            elif rule==17:
-                # Discard something
+            elif rule==26:
+                # Discard our oldest card
                 if observation['information_tokens'] < self.max_information_tokens:
-                    return {'action_type': 'DISCARD', 'card_index': 0}# discards the oldest card (card_index 0 will be oldest card)
+                    return {'action_type': 'DISCARD', 'card_index': 0}
 
 
-            elif rule==18:
-                # Play our best-hope card
+            elif rule==27:
+                # Play the card with the highest probability of being playable 
                 return {'action_type': 'PLAY', 'card_index': argmax(probability_cards_playable)}
 
 
             else:
-                # the chromosome contains an unknown rule
                 raise Exception("Rule not defined: "+str(rule))
-        # The chromosome needs to be defined so the program never gets to here.  
-        # E.g. always include rules 5 and 6 in the chromosome somewhere to ensure this never happens..        
+        # If no rule has fired, then raise an exception (shouldn't happen provided rule 26, 27 are present
         raise Exception("No rule fired for game situation - faulty rule set")
